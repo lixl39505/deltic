@@ -1,5 +1,6 @@
 export { Compiler } from './compiler.js'
 export { defineConfig, loadConfig } from './config/index.js'
+export { loadEnvFiles, parseEnvContent } from './config/env.js'
 export { resolveOptions } from './config/resolve.js'
 export { preset } from './preset/index.js'
 
@@ -12,6 +13,16 @@ export {
 } from './plugins/index.js'
 
 export { BUILTIN_PIPES } from './pipes/index.js'
+export {
+  aliasPipe,
+  type AliasPipeOptions,
+  type AliasStrategy,
+  DEFAULT_ALIAS_STRATEGIES,
+} from './pipes/alias.js'
+export { dependPipe, type DependPipeOptions } from './pipes/depend.js'
+export { depAddPipe, type DepAddPipeOptions } from './pipes/dep-add.js'
+export { envPipe, type EnvPipeOptions } from './pipes/env.js'
+export { strJson5Pipe } from './pipes/str-json5.js'
 export {
   createTransform,
   deriveFile,
