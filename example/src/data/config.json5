@@ -1,0 +1,5 @@
+{
+  name: 'demo',
+  // json5 comments are normalized to standard JSON
+  tags: ['a', 'b'],
+}

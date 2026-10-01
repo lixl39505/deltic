@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+/.deltic/
+*.log
+.DS_Store
+/.e2e-dbg/
