@@ -1,7 +1,8 @@
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { CompileError } from '../../../src/errors.js'
-import { createTransform, wrapPipeError } from '../../../src/pipes/stream.js'
+import { createTransform, deriveFile, wrapPipeError } from '../../../src/pipes/stream.js'
 import { makeFile, runStream } from '../../helpers/stream.js'
 
 describe('createTransform', () => {
@@ -90,5 +91,36 @@ describe('wrapPipeError', () => {
     expect(error.message).toContain(file.path)
     expect(error.cause).toBe('text failure')
     expect(error.file).toBe(file.path)
+  })
+})
+
+describe('deriveFile', () => {
+  it('inherits cwd/base and shares the parent context', () => {
+    const base = path.resolve('/project/src')
+    const parent = makeFile(path.join(base, 'a.vue'), 'parent', base)
+    const context = { originalPath: parent.path }
+    ;(parent as { context?: unknown }).context = context
+
+    const derived = deriveFile(parent, {
+      path: path.join(base, 'a', 'a.js'),
+      contents: Buffer.from('derived'),
+    })
+
+    expect(derived.cwd).toBe(parent.cwd)
+    expect(derived.base).toBe(base)
+    expect(derived.path).toBe(path.join(base, 'a', 'a.js'))
+    expect(derived.contents).toEqual(Buffer.from('derived'))
+    expect((derived as { context?: unknown }).context).toBe(context)
+  })
+
+  it('leaves the context unset when the parent has none', () => {
+    const parent = makeFile('/project/src/a.vue', 'parent')
+
+    const derived = deriveFile(parent, {
+      path: '/project/src/a/a.js',
+      contents: Buffer.from('derived'),
+    })
+
+    expect((derived as { context?: unknown }).context).toBeUndefined()
   })
 })

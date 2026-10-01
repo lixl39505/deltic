@@ -1,5 +1,7 @@
 import { Transform } from 'streamx'
 
+import VinylPkg from 'vinyl'
+
 import { CompileError } from '../errors.js'
 import type { Vinyl } from '../types.js'
 
@@ -55,4 +57,34 @@ export function createTransform(
       }
     },
   })
+}
+
+export interface DerivedFileSpec {
+  /** Absolute path of the derived file (must sit under the parent's base). */
+  path: string
+  contents: Buffer
+}
+
+/**
+ * Creates a vinyl file derived from `parent` (e.g. an SFC slice, a route map,
+ * or a less-vars artifact). The derived file inherits cwd/base and shares the
+ * parent's file context, so dependency collection and output attribution keep
+ * pointing at the original source. Emitted content must be final — derived
+ * files flow through the remaining pipes and dest untouched.
+ */
+export function deriveFile(parent: Vinyl, spec: DerivedFileSpec): Vinyl {
+  const derived = new VinylPkg({
+    cwd: parent.cwd,
+    base: parent.base,
+    path: spec.path,
+    contents: spec.contents,
+  })
+
+  const context = (parent as { context?: unknown }).context
+
+  if (context !== undefined) {
+    ;(derived as { context?: unknown }).context = context
+  }
+
+  return derived
 }

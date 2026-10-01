@@ -138,6 +138,7 @@ export function resolveOptions(
     cacheDir,
     ignore,
     alias,
+    taskTypeMap: { ...user.taskTypeMap },
     mode,
     env,
     loadEnv,

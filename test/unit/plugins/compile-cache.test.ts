@@ -22,6 +22,15 @@ interface Env extends PluginTestEnv {
   srcFile: string
 }
 
+const makeTask = (marker = 'v1'): Record<string, unknown> => ({
+  name: 'js',
+  test: { globs: [], options: {} },
+  use: [{ name: 'js', factory: () => null, options: { marker } }],
+  compileAncestor: false,
+  cache: true,
+  output: true,
+})
+
 async function makeEnv(
   options: {
     compiled?: Record<string, number>
@@ -30,6 +39,8 @@ async function makeEnv(
     graphNode?: unknown
     warmup?: boolean
     withOutput?: boolean
+    taskMarker?: string
+    extraDeps?: () => readonly unknown[]
   } = {},
 ): Promise<Env> {
   root = await mkdtemp(path.join(tmpdir(), 'deltic-cache-'))
@@ -46,6 +57,7 @@ async function makeEnv(
     sourceDir: string
     outputDir: string
     version: string
+    options: { tasks: Record<string, unknown> }
     getGraphNode?: unknown
   }
 
@@ -53,6 +65,7 @@ async function makeEnv(
   compiler.sourceDir = root
   compiler.outputDir = path.join(root, 'dist')
   compiler.version = options.version ?? '0.1.0'
+  compiler.options.tasks = { js: makeTask(options.taskMarker) }
 
   if (options.graphNode !== undefined) {
     compiler.getGraphNode = vi.fn(() => options.graphNode)
@@ -67,7 +80,9 @@ async function makeEnv(
     env.state.set('version', options.version)
   }
 
-  await compileCachePlugin().setup(env.api)
+  await compileCachePlugin(
+    options.extraDeps === undefined ? {} : { extraDeps: options.extraDeps },
+  ).setup(env.api)
   await env.hooks.fire('init', { compiler: env.compiler as never })
 
   // Warm-up passes so the config checksum snapshot stabilizes before assertions.
@@ -83,12 +98,13 @@ async function makeEnv(
   }
 }
 
-function callCheck(env: Env, file: VinylType): boolean {
+function callCheck(env: Env, file: VinylType, taskName = 'js'): boolean {
   return (env.caps.checkFileCached as (
     id: string,
     mtimeMs: number,
     file: VinylType,
-  ) => boolean)(path.sep + path.basename(file.path), 111, file)
+    taskName: string,
+  ) => boolean)(path.sep + path.basename(file.path), 111, file, taskName)
 }
 
 function cacheFile(stat = true): VinylType {
@@ -108,16 +124,29 @@ async function touch(file: string): Promise<void> {
   await utimes(file, atime, new Date(mtime.getTime() + 5000))
 }
 
+// A fresh cache store has no task checksums yet, so the first verdict on any
+// file records them and misses. Prime with a throwaway probe file so the
+// target file's record stays untouched for single-call assertions.
+function primeTaskSum(env: Env, taskName = 'js'): void {
+  const probe = makeFile(path.join(root!, 'probe.js'), 'content', root!)
+  ;(probe as { stat: unknown }).stat = { mtimeMs: 1 }
+  probe.context = {
+    session: { totalCache: 0, totalHit: 0, files: [] },
+  } as never
+
+  callCheck(env, probe, taskName)
+}
+
 describe('compile-cache plugin', () => {
-  it('caches a file whose mtime, options and env are unchanged', async () => {
+  it('caches a file whose mtime, options, task config and env are unchanged', async () => {
     const env = await makeEnv({
       compiled: { [path.sep + 'a.js']: 111 },
       version: '0.1.0',
     })
 
-    const file = cacheFile()
+    primeTaskSum(env)
 
-    expect(callCheck(env, file)).toBe(true)
+    expect(callCheck(env, cacheFile())).toBe(true)
   })
 
   it('invalidates on the first run because no version is recorded', async () => {
@@ -125,6 +154,7 @@ describe('compile-cache plugin', () => {
       compiled: { [path.sep + 'a.js']: 111 },
     })
 
+    primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(false)
   })
@@ -136,6 +166,7 @@ describe('compile-cache plugin', () => {
       withOutput: false,
     })
 
+    primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(false)
   })
@@ -146,6 +177,7 @@ describe('compile-cache plugin', () => {
       version: '0.1.0',
     })
 
+    primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(true)
   })
@@ -156,6 +188,7 @@ describe('compile-cache plugin', () => {
       version: '0.1.0',
     })
 
+    primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(false)
 
@@ -173,6 +206,7 @@ describe('compile-cache plugin', () => {
       .options.alias = { changed: 'yes' }
     await env.hooks.fire('beforeCompile', { session: {} as never })
 
+    primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(false)
   })
@@ -180,8 +214,55 @@ describe('compile-cache plugin', () => {
   it('invalidates when there is no record for the file', async () => {
     const env = await makeEnv({ version: '0.1.0' })
 
+    primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(false)
+  })
+
+  it('invalidates only the files of a task whose config changed', async () => {
+    const env = await makeEnv({
+      compiled: { [path.sep + 'a.js']: 111 },
+      version: '0.1.0',
+    })
+
+    primeTaskSum(env)
+    expect(callCheck(env, cacheFile())).toBe(true)
+
+    // Same task name, changed config → verdict flips to a miss.
+    ;(
+      env.compiler as unknown as {
+        options: { tasks: Record<string, unknown> }
+      }
+    ).options.tasks.js = makeTask('v2')
+    await env.hooks.fire('beforeCompile', { session: {} as never })
+
+    expect(callCheck(env, cacheFile())).toBe(false)
+  })
+
+  it('misses when the task name is unknown to the compiler', async () => {
+    const env = await makeEnv({
+      compiled: { [path.sep + 'a.js']: 111 },
+      version: '0.1.0',
+    })
+
+    primeTaskSum(env)
+
+    expect(callCheck(env, cacheFile(), 'nope')).toBe(false)
+  })
+
+  it('persists task checksums so a fresh compiler hits immediately', async () => {
+    const env = await makeEnv({
+      compiled: { [path.sep + 'a.js']: 111 },
+      version: '0.1.0',
+    })
+
+    primeTaskSum(env)
+    env.store.flush()
+
+    const stored = env.store.checksums.all()
+
+    expect(Object.keys(stored)).toContain('task')
+    expect(Object.keys(stored.task!)).toContain('js')
   })
 
   it('invalidates when an .env pseudo dependency changed', async () => {
@@ -198,6 +279,7 @@ describe('compile-cache plugin', () => {
     })
     env.state.set('env', { NAME: 'one' })
 
+    primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(true)
 
@@ -207,6 +289,75 @@ describe('compile-cache plugin', () => {
     await env.hooks.fire('beforeCompile', { session: {} as never })
 
     expect(callCheck(env, cacheFile())).toBe(false)
+  })
+
+  it('invalidates when extraDeps changed and accepts shallow-equal snapshots', async () => {
+    let deps: readonly unknown[] = [{ tag: 'one' }]
+    const env = await makeEnv({
+      compiled: { [path.sep + 'a.js']: 111 },
+      version: '0.1.0',
+      extraDeps: () => deps,
+    })
+
+    // First pass records the snapshot (miss), then a shallow-equal snapshot
+    // (fresh object, same shape) keeps the cache warm.
+    primeTaskSum(env)
+    await env.hooks.fire('afterCompile', { session: {} as never })
+    env.store.flush()
+    await env.hooks.fire('beforeCompile', { session: {} as never })
+    expect(callCheck(env, cacheFile())).toBe(true)
+
+    deps = [{ tag: 'two' }]
+    await env.hooks.fire('beforeCompile', { session: {} as never })
+    expect(callCheck(env, cacheFile())).toBe(false)
+  })
+
+  it('ignores extraDeps comparisons until the first snapshot is saved', async () => {
+    const env = await makeEnv({
+      compiled: { [path.sep + 'a.js']: 111 },
+      version: '0.1.0',
+      extraDeps: () => ['any'],
+    })
+
+    // Snapshot not yet saved → every verdict is a miss.
+    primeTaskSum(env)
+    expect(callCheck(env, cacheFile())).toBe(false)
+
+    await env.hooks.fire('afterCompile', { session: {} as never })
+    env.store.flush()
+    await env.hooks.fire('beforeCompile', { session: {} as never })
+    expect(callCheck(env, cacheFile())).toBe(true)
+  })
+
+  it('extraDeps shallow comparison covers primitives, nulls and shape changes', async () => {
+    let deps: readonly unknown[] = ['seed']
+    const env = await makeEnv({
+      compiled: { [path.sep + 'a.js']: 111 },
+      version: '0.1.0',
+      extraDeps: () => deps,
+    })
+
+    // Establish the persisted snapshot so each round below compares values.
+    primeTaskSum(env)
+    await env.hooks.fire('afterCompile', { session: {} as never })
+    env.store.flush()
+
+    for (const next of [
+      [null],
+      [{ a: 1 }],
+      [{ a: 1, b: 2 }],
+      [null],
+      ['primitive'],
+    ] as Array<readonly unknown[]>) {
+      deps = next
+      await env.hooks.fire('beforeCompile', { session: {} as never })
+
+      expect(callCheck(env, cacheFile())).toBe(false)
+
+      // persist the snapshot like a real run's finish task would
+      await env.hooks.fire('afterCompile', { session: {} as never })
+      env.store.flush()
+    }
   })
 
   it('removeCache accepts strings, files and arrays', async () => {

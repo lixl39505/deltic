@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { Transform } from 'streamx'
+import Vinyl from 'vinyl'
 
 import { Compiler } from '../../src/compiler.js'
 import { SqliteState } from '../../src/store/sqlite-state.js'
@@ -212,5 +214,45 @@ describe('compiler.run (full pipeline)', () => {
     await expect(compiler.run()).rejects.toThrowError()
 
     await compiler.stop().catch(() => {})
+  }, 20000)
+
+  it('attributes context-less emitted files to themselves for cleanup', async () => {
+    const project = await createProject({ 'js/entry.js': 'export const a = 1' })
+    const extraPath = path.join(project.srcDir, 'js', 'extra.js')
+    const extraPipe = (): Transform =>
+      new Transform({
+        transform(chunk: unknown, callback: (err: Error | null, data?: unknown) => void) {
+          // a pipe emitting a raw vinyl without a file context: dest re-bases
+          // the file to the output tree, so attribution falls back to the
+          // file's own (rebased) path — deriveFile + shared context is the
+          // supported way to keep attribution on the source
+          this.push(
+            new Vinyl({
+              base: project.srcDir,
+              path: extraPath,
+              contents: Buffer.from('emitted'),
+            }),
+          )
+          callback(null, chunk)
+        },
+      })
+    const compiler = new Compiler(
+      project.config({
+        tasks: {
+          js: { test: '**/*.js', use: [extraPipe] },
+        },
+      }),
+    )
+
+    const session = await compiler.run().finally(() => compiler.stop())
+
+    const sources = session.outputs.map((output) => output.source)
+    expect(sources).toContain(path.join(project.srcDir, 'js', 'entry.js'))
+    expect(sources).toContain(path.join(project.distDir, 'js', 'extra.js'))
+
+    const outs = session.outputs.map((output) => output.path)
+    expect(outs).toContain(path.join(project.distDir, 'js', 'entry.js'))
+    expect(outs).toContain(path.join(project.distDir, 'js', 'extra.js'))
+    expect(project.has(path.join('js', 'extra.js'))).toBe(true)
   }, 20000)
 })

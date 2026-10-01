@@ -12,6 +12,15 @@ export {
 } from './plugins/index.js'
 
 export { BUILTIN_PIPES } from './pipes/index.js'
+export {
+  createTransform,
+  deriveFile,
+  wrapPipeError,
+  type BufferVinyl,
+  type DerivedFileSpec,
+  type PipeNext,
+  type StreamCallback,
+} from './pipes/stream.js'
 export { SqliteState } from './store/sqlite-state.js'
 export { Profiler, renderProfile } from './core/profile.js'
 export { Progress, createLineRenderer } from './core/progress.js'
@@ -25,6 +34,7 @@ export {
   stripBase,
   toGlobPath,
 } from './utils/paths.js'
+export { objectMerge } from './utils/object.js'
 export { relativeId } from './plugins/dep-graph.js'
 
 export {

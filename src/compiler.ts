@@ -297,6 +297,7 @@ export class Compiler {
           relativeId(filePath, this.sourceDir),
           mtimeMs,
           filePath,
+          task.name,
         )
 
         if (hit) {
@@ -461,6 +462,23 @@ export class Compiler {
 
             if (typeof (file as { path?: unknown })?.path === 'string') {
               profiler.endFile(config.name, file, false)
+
+              // Record what dest actually wrote (source attribution via
+              // originalPath) so the clean plugin can remove artifacts
+              // precisely instead of guessing globs.
+              if (config.output) {
+                const context = (
+                  file as { context?: { originalPath?: string } }
+                ).context
+
+                session.outputs.push({
+                  source: context?.originalPath ?? file.path,
+                  path: path.join(
+                    this.outputDir,
+                    path.relative(file.base, file.path),
+                  ),
+                })
+              }
             }
 
             progress.increment()
@@ -611,7 +629,9 @@ export class Compiler {
   // -------------------------------------------------------------- public API
 
   getTaskType(filePath: string): string {
-    return path.extname(filePath).replace('.', '')
+    const ext = path.extname(filePath).replace('.', '')
+
+    return this.options.taskTypeMap[ext] ?? ext
   }
 
   get logger(): ResolvedOptions['logger'] {

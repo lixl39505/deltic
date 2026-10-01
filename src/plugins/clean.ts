@@ -1,51 +1,83 @@
-import { rm } from 'node:fs/promises'
+import { readdir, rm, rmdir } from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
 import path from 'node:path'
 
 import fastGlob from 'fast-glob'
 
-import { escapeGlobLiteral, joinGlob, stripBase, toGlobPath } from '../utils/paths.js'
+import { dedup, groupBy } from '../utils/array.js'
+import { joinGlob, toGlobPath } from '../utils/paths.js'
 import { definePlugin } from './define-plugin.js'
-import type { Plugin } from '../types.js'
+import { relativeId } from './dep-graph.js'
+import type { CleanCapabilities, Plugin } from '../types.js'
 
-async function removeGlobs(
-  globs: string[],
-  cwd: string,
-  onDelete: (deleted: string) => void,
-): Promise<number> {
-  // globs are absolute, so matches come back absolute
-  const matches = fastGlob.sync(globs, { cwd })
-
-  for (const match of matches) {
-    await rm(match, { recursive: true, force: true })
-    onDelete(match)
-  }
-
-  return matches.length
-}
-
-// Output hygiene: tracks the source file list and removes stale artifacts
-// for files that disappeared from the source tree.
+// Output hygiene driven by actual emission records: every task pipeline
+// records the files dest writes (session.outputs, attributed to their source
+// via originalPath), and this plugin removes exactly those records when the
+// source disappears — no glob guessing, so one-to-many producers (e.g. SFC
+// slices under a per-component directory) are cleaned precisely.
 export function cleanPlugin(): Plugin {
   return definePlugin('clean', (api) => {
     const { compiler, hooks, logger, store } = api
 
     let fileList: string[] = []
+    // source id → emitted output paths
+    let outputs: Record<string, string[]> = {}
 
-    const getOutputPath = (paths: string | readonly string[]): string[] => {
-      const list = typeof paths === 'string' ? [paths] : [...paths]
-      const { baseDir, sourceDir, outputDir } = compiler
+    const removeFiles = async (paths: readonly string[]): Promise<void> => {
+      for (const filePath of paths) {
+        await rm(filePath, { force: true })
+        logger.info(`${filePath} was deleted`)
+      }
+    }
 
-      return list.map((rawPath) => {
-        const filePath = path.resolve(baseDir, rawPath)
-        const extname = path.extname(filePath)
-        const basename = path.basename(filePath, extname)
-        // stripBase survives Windows casing drift; raw String.replace did not
-        const dirname = path.dirname(
-          path.join(outputDir, stripBase(filePath, sourceDir)),
-        )
+    // Removes now-empty directories above deleted outputs, stopping at the
+    // output directory itself.
+    const pruneEmptyDirs = async (startDir: string): Promise<void> => {
+      const stop = path.resolve(compiler.outputDir)
+      let current = path.resolve(startDir)
 
-        return joinGlob(dirname, `${escapeGlobLiteral(basename)}.*`)
-      })
+      for (;;) {
+        const rel = path.relative(stop, current)
+
+        if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+          return
+        }
+
+        let entries: Dirent[]
+
+        try {
+          entries = await readdir(current, { withFileTypes: true })
+        } catch {
+          return
+        }
+
+        if (entries.length > 0) {
+          return
+        }
+
+        await rmdir(current)
+        current = path.dirname(current)
+      }
+    }
+
+    const dropOutputs = async (ids: readonly string[]): Promise<void> => {
+      for (const id of ids) {
+        const recorded = outputs[id]
+
+        if (recorded === undefined) {
+          continue
+        }
+
+        await removeFiles(recorded)
+
+        for (const filePath of recorded) {
+          await pruneEmptyDirs(path.dirname(filePath))
+        }
+
+        delete outputs[id]
+      }
+
+      store.outputs.remove(ids)
     }
 
     const cleanExpired = async (): Promise<string[]> => {
@@ -65,9 +97,7 @@ export function cleanPlugin(): Plugin {
         return []
       }
 
-      await removeGlobs(getOutputPath(expired), compiler.baseDir, (deleted) => {
-        logger.info(`${deleted} was deleted`)
-      })
+      await dropOutputs(expired.map((item) => relativeId(item, compiler.sourceDir)))
 
       if (added.length > 0) {
         store.files.add(added)
@@ -84,26 +114,19 @@ export function cleanPlugin(): Plugin {
     ): Promise<string[]> => {
       const list = typeof paths === 'string' ? [paths] : [...paths]
 
-      await removeGlobs(getOutputPath(list), compiler.baseDir, (deleted) => {
-        logger.info(`${deleted} was deleted`)
-      })
-
-      const removed: string[] = []
-
       for (const item of list) {
         // fast-glob lists sources with forward slashes; watcher events arrive
         // with platform separators — canonicalize before comparing.
         const resolved = toGlobPath(path.resolve(compiler.baseDir, item))
+
+        await dropOutputs([relativeId(resolved, compiler.sourceDir)])
+
         const index = fileList.indexOf(resolved)
 
         if (index >= 0) {
           fileList.splice(index, 1)
-          removed.push(resolved)
+          store.files.remove([resolved])
         }
-      }
-
-      if (removed.length > 0) {
-        store.files.remove(removed)
       }
 
       return list
@@ -111,6 +134,31 @@ export function cleanPlugin(): Plugin {
 
     hooks.on('init', () => {
       fileList = store.files.all()
+      outputs = store.outputs.all()
+    })
+
+    hooks.on('afterCompile', async ({ session }) => {
+      if (session.outputs.length === 0) {
+        return
+      }
+
+      const grouped = groupBy(session.outputs, (output) => output.source)
+
+      for (const [source, items] of Object.entries(grouped)) {
+        const id = relativeId(source, compiler.sourceDir)
+        const next = dedup(items.map((item) => item.path))
+        const previous = outputs[id] ?? []
+        // A config change can rename outputs: drop files this run no longer
+        // writes so stale artifacts never outlive their record.
+        const vanished = previous.filter((filePath) => !next.includes(filePath))
+
+        outputs[id] = next
+        store.outputs.upsert([[id, next]])
+
+        if (vanished.length > 0) {
+          await removeFiles(vanished)
+        }
+      }
     })
 
     api.extendContext({
@@ -118,11 +166,10 @@ export function cleanPlugin(): Plugin {
         isNewFile: (filePath: string) => !fileList.includes(filePath),
         cleanExpired,
         cleanSpec,
-        getOutputPath,
         saveFileList: () => {
           store.files.add(fileList)
         },
-      },
+      } satisfies CleanCapabilities,
     })
   })
 }

@@ -10,11 +10,15 @@ import type {
   CompileCacheCapabilities,
   DepNode,
   FileRef,
+  NormalizedTaskConfig,
   Plugin,
   Vinyl,
 } from '../types.js'
 
-// Config fields that must not invalidate the cache when they change.
+// Config fields that must not invalidate the cache when they change. `tasks`
+// is excluded because task configs get their own finer-grained checksums: a
+// file's cache verdict is bound to the checksum of the task that compiles it,
+// so changing one task never invalidates unrelated file types.
 const CHECKSUM_EXCLUDED_FIELDS = new Set([
   'env',
   'mode',
@@ -36,18 +40,67 @@ const CHECKSUM_EXCLUDED_FIELDS = new Set([
 // Checksums without an explicit namespace live under this scope.
 const ROOT_SCOPE = '@'
 
+// Per-task config checksums live under this scope, keyed by task name.
+const TASK_SCOPE = 'task'
+
 const fileUid = (file: { path: string; base: string }): string =>
   relativeId(file.path, file.base)
 
 export interface CompileCachePluginOptions {
   versionKey?: string
+  /**
+   * Extra invalidation inputs, evaluated once per run. Snapshots are persisted
+   * and compared item-by-item (shallow equality): any difference invalidates
+   * the whole cache. Use it to tie cache validity to embedder state such as a
+   * toolchain version.
+   */
+  extraDeps?: () => readonly unknown[]
 }
 
+const shallowEqual = (a: unknown, b: unknown): boolean => {
+  if (Object.is(a, b)) {
+    return true
+  }
+
+  if (
+    typeof a !== 'object' ||
+    a === null ||
+    typeof b !== 'object' ||
+    b === null
+  ) {
+    return false
+  }
+
+  const record = a as Record<string, unknown>
+  const keys = Object.keys(record)
+  const other = b as Record<string, unknown>
+
+  if (keys.length !== Object.keys(other).length) {
+    return false
+  }
+
+  return keys.every((key) => Object.is(record[key], other[key]))
+}
+
+const depsChanged = (
+  prev: readonly unknown[] | undefined,
+  next: readonly unknown[],
+): boolean =>
+  prev === undefined ||
+  prev.length !== next.length ||
+  next.some((value, index) => !shallowEqual(prev[index], value))
+
+const serializeTask = (task: NormalizedTaskConfig): string =>
+  JSON.stringify(task, (_key, value: unknown) =>
+    typeof value === 'function' ? value.toString() : value,
+  )
+
 // File-level compile cache. A cache entry is invalidated by: a tool version
-// change, a missing output directory, a config checksum change, a missing
-// record, a changed mtime, or a changed `.env` pseudo-dependency value.
+// change, a missing output directory, a config checksum change, an extra-deps
+// change, a changed checksum of the owning task's config, a missing record, a
+// changed mtime, or a changed `.env` pseudo-dependency value.
 export function compileCachePlugin(options: CompileCachePluginOptions = {}): Plugin {
-  const { versionKey = 'version' } = options
+  const { versionKey = 'version', extraDeps } = options
 
   return definePlugin('compile-cache', (api) => {
     const { compiler, hooks, store } = api
@@ -55,9 +108,13 @@ export function compileCachePlugin(options: CompileCachePluginOptions = {}): Plu
     // scope → path → sum
     let checksums: Record<string, Record<string, string>> = {}
     let compiled: Record<string, number> = {}
+    let taskSums: Record<string, string> = {}
     let lastVersion: string | undefined
     let isOutputDirExist = true
     let isOptionsChanged = false
+    let isDepsChanged = false
+    let pendingDeps: readonly unknown[] | undefined
+    const currentTaskSums = new Map<string, string>()
 
     const removeCache = (
       files: string | Vinyl | readonly (string | Vinyl)[],
@@ -133,18 +190,57 @@ export function compileCachePlugin(options: CompileCachePluginOptions = {}): Plu
       } as Vinyl).changed
     }
 
-    const checkFileCached = (id: string, current: number, file: FileRef): boolean => {
+    const isTaskChecksumCurrent = (taskName: string): boolean => {
+      let sum = currentTaskSums.get(taskName)
+
+      if (sum === undefined) {
+        const task = compiler.options.tasks[taskName]
+
+        if (task === undefined) {
+          return false
+        }
+
+        sum = checksum(serializeTask(task), 'sha1')
+        currentTaskSums.set(taskName, sum)
+      }
+
+      if (taskSums[taskName] === sum) {
+        return true
+      }
+
+      taskSums[taskName] = sum
+      store.checksums.upsert(TASK_SCOPE, [[taskName, sum]])
+
+      return false
+    }
+
+    const checkFileCached = (
+      id: string,
+      current: number,
+      file: FileRef,
+      taskName: string,
+    ): boolean => {
       const last = compiled[id]
 
       compiled[id] = current
       store.compiled.upsert([[id, current]])
 
+      // Evaluate (and persist) the task checksum before the global gates:
+      // a full-miss run must still record the sums, or the next run would
+      // invalidate everything again for one extra cycle.
+      const taskCurrent = isTaskChecksumCurrent(taskName)
+
       if (
         lastVersion !== compiler.version ||
         !isOutputDirExist ||
         isOptionsChanged ||
+        isDepsChanged ||
         last === undefined
       ) {
+        return false
+      }
+
+      if (!taskCurrent) {
         return false
       }
 
@@ -183,6 +279,7 @@ export function compileCachePlugin(options: CompileCachePluginOptions = {}): Plu
     hooks.on('init', () => {
       checksums = store.checksums.all()
       compiled = store.compiled.all()
+      taskSums = store.checksums.all()[TASK_SCOPE] ?? {}
     })
 
     hooks.on('clean', ({ expired }) => {
@@ -193,11 +290,29 @@ export function compileCachePlugin(options: CompileCachePluginOptions = {}): Plu
       lastVersion = compiler.query<string | undefined>(versionKey, undefined)
       isOutputDirExist = existsSync(compiler.outputDir)
       isOptionsChanged = checkOptionsChanged()
+      currentTaskSums.clear()
+
+      if (extraDeps === undefined) {
+        isDepsChanged = false
+        pendingDeps = undefined
+        return
+      }
+
+      pendingDeps = extraDeps()
+      isDepsChanged = depsChanged(
+        store.meta.get<readonly unknown[] | undefined>('extraDeps', undefined),
+        pendingDeps,
+      )
     })
 
     hooks.on('afterCompile', () => {
       if (lastVersion !== compiler.version) {
         compiler.save(versionKey, compiler.version)
+      }
+
+      if (pendingDeps !== undefined) {
+        store.meta.set('extraDeps', [...pendingDeps])
+        pendingDeps = undefined
       }
     })
 
@@ -214,7 +329,7 @@ export function compileCachePlugin(options: CompileCachePluginOptions = {}): Plu
         checkFileCached,
         checkFileChanged,
         removeCache,
-      },
+      } satisfies CompileCacheCapabilities,
     })
   })
 }

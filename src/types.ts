@@ -170,6 +170,12 @@ export interface UserConfig {
   ignore?: string | readonly string[]
   /** Path aliases resolved against baseDir. */
   alias?: Record<string, string>
+  /**
+   * Maps a file extension (without dot) onto a task name for incremental
+   * compiles, e.g. `{ jpg: 'img' }` routes `.jpg` changes to the `img` task.
+   * Unmapped extensions resolve to the task named after the extension itself.
+   */
+  taskTypeMap?: Record<string, string>
   /** Environment values replaced into sources; overrides loaded .env files. */
   env?: Record<string, EnvValue>
   /** Opt in to reading .env files; never mutates process.env (default false). */
@@ -200,6 +206,7 @@ export interface ResolvedOptions {
   cacheDir: string
   ignore: string[]
   alias: Record<string, string>
+  taskTypeMap: Record<string, string>
   mode: string
   env: Record<string, string>
   loadEnv: boolean
@@ -278,6 +285,13 @@ export interface FileListStore {
   remove(paths: readonly string[]): void
 }
 
+/** source id → emitted output paths, recorded per compile for exact cleanup. */
+export interface OutputsStore {
+  all(): Record<string, string[]>
+  upsert(entries: Iterable<[string, readonly string[]]>): void
+  remove(ids: readonly string[]): void
+}
+
 /** Dependency-graph nodes; edges are stored per node. */
 export interface GraphStore {
   all(): Record<string, DepNode>
@@ -296,6 +310,7 @@ export interface StateStore {
   readonly checksums: ChecksumStore
   readonly files: FileListStore
   readonly graph: GraphStore
+  readonly outputs: OutputsStore
   flush(): void
   close(): void
 }
@@ -344,11 +359,21 @@ export interface FileContext extends CompileContext {
   readonly session: SessionContext
 }
 
+/** One file emitted by a task pipeline during a session. */
+export interface SessionOutput {
+  /** Source path the file came from (`context.originalPath`). */
+  source: string
+  /** Absolute path written to the output directory. */
+  path: string
+}
+
 export interface SessionContext extends CompileContext {
   startTime: number
   endTime: number
   /** Files that actually went through (non-cached) compilation. */
   readonly files: string[]
+  /** Files emitted to the output directory, per source (for exact cleanup). */
+  readonly outputs: SessionOutput[]
   /** Number of files seen by the pipeline. */
   total: number
   /** Files considered by the cache gate. */

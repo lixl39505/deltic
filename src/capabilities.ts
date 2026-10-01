@@ -32,12 +32,14 @@ export interface DepGraphCapabilities {
 export interface CompileCacheCapabilities {
   /**
    * Cache verdict for one scanned file: updates the mtime record and reports
-   * whether the cache gate would drop it.  feeds the dependency-graph
-   * env-pseudo-dependency check.
+   * whether the cache gate would drop it. `taskName` ties the verdict to the
+   * owning task's config checksum, so changing one task only invalidates the
+   * files it compiles. Also feeds the dependency-graph env-pseudo-dependency
+   * check.
    *
    * @requires plugin compileCachePlugin()
    */
-  checkFileCached(id: string, mtimeMs: number, file: FileRef): boolean
+  checkFileCached(id: string, mtimeMs: number, file: FileRef, taskName: string): boolean
   /** @requires plugin compileCachePlugin() */
   checkFileChanged(file: Vinyl, settings?: CheckFileChangedSettings): CheckFileChangedResult
   /** @requires plugin compileCachePlugin() */
@@ -52,8 +54,6 @@ export interface CleanCapabilities {
   cleanExpired(): Promise<string[]>
   /** @requires plugin cleanPlugin() */
   cleanSpec(paths: string | readonly string[]): Promise<string[]>
-  /** @requires plugin cleanPlugin() */
-  getOutputPath(paths: string | readonly string[]): string[]
   /** @requires plugin cleanPlugin() */
   saveFileList(): void
 }

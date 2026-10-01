@@ -73,6 +73,7 @@ export function makeSession(): SessionContext {
     startTime: 0,
     endTime: -1,
     files: [],
+    outputs: [],
     total: 0,
     totalCache: 0,
     totalHit: 0,
