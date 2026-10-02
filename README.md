@@ -1,5 +1,7 @@
 # deltic
 
+English · [简体中文](./README.zh-CN.md)
+
 Gulp-based incremental compile toolkit — incremental compilation, compile
 caching, dependency-graph rebuilds and a plugin system as a reusable library
 and CLI. TypeScript 7 on Gulp 5, no assumptions about what you are building.

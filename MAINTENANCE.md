@@ -1,5 +1,7 @@
 # MAINTENANCE
 
+English · [简体中文](./MAINTENANCE.zh-CN.md)
+
 Maintainer-facing notes: toolchain baseline, quality gates, architecture
 rules, release checklist. User-facing documentation lives in
 [README.md](./README.md); a runnable project is in [example/](./example).
