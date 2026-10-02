@@ -62,8 +62,29 @@ describe('resolveOptions', () => {
     expect(options.alias.cdn).toBe('https://x.example.com/')
   })
 
-  it('does not read .env files unless loadEnv is enabled', () => {
-    const options = resolveOptions(makeConfig({ env: { A: 'x' } }))
+  it('reads .env files by default, with explicit env overriding file values', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const envDir = await mkdtemp(path.join(tmpdir(), 'deltic-envdef-'))
+    await writeFile(path.join(envDir, '.env'), 'FROM=envfile\nOVERRIDE=file')
+    await writeFile(path.join(envDir, '.env.development'), 'OVERRIDE=modefile')
+
+    try {
+      const options = resolveOptions(
+        makeConfig({ baseDir: envDir, env: { OVERRIDE: 'explicit' } }),
+      )
+
+      expect(options.loadEnv).toBe(true)
+      expect(options.env.FROM).toBe('envfile')
+      expect(options.env.OVERRIDE).toBe('explicit')
+      expect(options.env.mode).toBe('development')
+    } finally {
+      await rm(envDir, { recursive: true, force: true })
+    }
+  })
+
+  it('skips .env files when loadEnv is false', () => {
+    const options = resolveOptions(makeConfig({ loadEnv: false, env: { A: 'x' } }))
 
     expect(options.loadEnv).toBe(false)
     expect(options.env).toEqual({ A: 'x', mode: 'development' })

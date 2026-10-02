@@ -72,9 +72,9 @@ export function resolveOptions(
     alias[key] = /^https?:\/\//.test(value) ? value : path.resolve(baseDir, value)
   }
 
-  // env: opt-in .env files ⊕ explicit env values ⊕ mode marker.
+  // env: .env files (default on) ⊕ explicit env values ⊕ mode marker.
   const rawLoadEnv = user.loadEnv
-  const loadEnv = rawLoadEnv !== undefined && rawLoadEnv !== false
+  const loadEnv = rawLoadEnv !== false
   const env: Record<string, string> = {}
 
   if (loadEnv) {

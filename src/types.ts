@@ -178,7 +178,7 @@ export interface UserConfig {
   taskTypeMap?: Record<string, string>
   /** Environment values replaced into sources; overrides loaded .env files. */
   env?: Record<string, EnvValue>
-  /** Opt in to reading .env files; never mutates process.env (default false). */
+  /** Read .env files (default true); never mutates process.env. */
   loadEnv?: boolean | { mode?: string; dir?: string }
   mode?: string
   /** Task set — required; nothing is registered implicitly. */
