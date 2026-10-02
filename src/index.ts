@@ -1,5 +1,12 @@
 export { Compiler } from './compiler.js'
-export { defineConfig, loadConfig } from './config/index.js'
+export {
+  createConfigLoader,
+  defineConfig,
+  loadConfig,
+  type ConfigLoader,
+  type ConfigLoaderOptions,
+  type LoadedConfig,
+} from './config/index.js'
 export { loadEnvFiles, parseEnvContent } from './config/env.js'
 export { resolveOptions } from './config/resolve.js'
 export { preset } from './preset/index.js'
