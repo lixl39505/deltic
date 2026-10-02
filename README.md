@@ -1,8 +1,8 @@
 # deltic
 
-Gulp-based incremental compile toolkit — the generic core of
-[weapp-gulp-service](https://github.com/lixl39505/weapp-gulp-service), rebuilt
-in TypeScript 7 on Gulp 5 with no mini-program assumptions.
+Gulp-based incremental compile toolkit — incremental compilation, compile
+caching, dependency-graph rebuilds and a plugin system as a reusable library
+and CLI. TypeScript 7 on Gulp 5, no assumptions about what you are building.
 
 - **Incremental compilation** — buffered file watching, per-batch rebuilds,
   upstream tracing via a dependency graph
@@ -38,7 +38,7 @@ import { defineConfig, preset } from 'deltic'
 export default defineConfig({
   alias: { '@': './src' },
   env: { API_URL: 'https://api.example.com' },
-  // loadEnv: true,  // opt in to .env files — process.env is never touched
+  // loadEnv: false, // .env files load by default — opt out like this (process.env is never touched)
   // profile: true,
   tasks: preset(), // js / json / json5 (+ assets passthrough) — explicit, no implicit tasks
 })
@@ -150,7 +150,7 @@ contents at all).
 | `baseDir` | config dir or cwd | project root |
 | `alias` | `{}` | resolved against `baseDir`; `http(s)` values pass through |
 | `env` | `{}` | values substituted for `process.env.X` in sources |
-| `loadEnv` | `false` | opt in: `.env` → `.env.local` → `.env.[mode]` → `.env.[mode].local` |
+| `loadEnv` | `true` | `.env` → `.env.local` → `.env.[mode]` → `.env.[mode].local`; set `false` to opt out |
 | `mode` | `development` / `production` per command | injected as `env.mode` |
 | `ignore` | `[]` | extra globs; output/cache/node_modules always ignored |
 | `pipes` | — | instance pipe registry additions |
@@ -160,26 +160,12 @@ contents at all).
 | `watch` | `{ debounceMs: 200 }` | plus passthrough chokidar options |
 | `logger` / `timer` | built-ins | injectable for tests |
 
-## Migrating from weapp-gulp-service (wgs)
+### Alias semantics
 
-| wgs | deltic |
-| --- | --- |
-| `wgs serve` / `wgs build` | `deltic dev` / `deltic build` (`upload`, `build:npm` removed with the mini-program stack) |
-| `weapp.config.js`, auto-loaded tasks | `deltic.config.ts`, explicit `tasks` or `preset()` |
-| `.wgs (JSON)` | `.deltic/state.db (SQLite)` |
-| `cacheDir` `.wgs` | `.deltic` |
-| `process.env` auto-pollution, ini env always on | env values from `env` (+ opt-in `loadEnv`); `process.env` untouched |
-| alias rewrites stripped leading `../` | outputs `./`-prefixed same-directory paths (correct relative semantics) |
-| `css.rename`, `px2rpx`, `lessVar`, sfc/mp tasks | removed with the mini-program stack — compose your own pipes |
-| `gulp-mp-alias` global cache bug, `once` implicit-global checksum, json5 bad require | fixed |
-| `taskerror` hook, `wgsResolve` | `taskError`, `resolve` |
-| hooks global + `next()` callbacks | per-instance async hooks (`on` / `fire`) |
-| prototype-patched plugins, global pipe cache | named plugins with `extendContext` / `registerPipe`, per-instance registries |
-| compile-cache compared env against `process.env` | compares against resolved `env` (single source of truth) |
-
-Behavioral notes: alias results now keep correct relative depth (including
-`../`), bare `'@'` requests stay untouched, and same-directory aliases emit
-`./lib` so dependency scanners can distinguish them from package imports.
+Alias rewriting keeps an import's true relative depth (`../` is never
+stripped), leaves specifiers that match no alias key untouched, and emits
+`./`-prefixed paths for same-directory aliases — so dependency scanners can
+distinguish aliased imports from package imports.
 
 ## Path rules (Windows & CI — read before writing a plugin)
 
