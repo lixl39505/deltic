@@ -30,7 +30,10 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "pnpm build && vitest run test/e2e",
     "bench": "pnpm build && node bench/run.mjs",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\""
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "preversion": "pnpm test",
+    "version": "git add -A",
+    "postversion": "git push && git push --tags"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",
