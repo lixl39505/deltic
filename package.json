@@ -43,12 +43,14 @@
     "gulp": "^5.0.1",
     "jiti": "^2.7.0",
     "json5": "^2.2.3",
+    "micromatch": "^4.0.8",
     "picocolors": "^1.1.1",
     "streamx": "^2.28.1",
     "vinyl": "^3.0.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
+    "@types/micromatch": "^4.0.9",
     "@types/node": "^26.6.3",
     "@types/vinyl": "^2.0.12",
     "@vitest/coverage-istanbul": "^5.0.2",

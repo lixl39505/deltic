@@ -152,6 +152,16 @@ Top-N 表格，并以 `session.profile` 暴露给程序化使用。
 | `watch` | `{ debounceMs: 200 }` | 另支持透传 chokidar 选项 |
 | `logger` / `timer` | 内置实现 | 可注入，便于测试 |
 
+### 监听后端（watcher backend）
+
+在 macOS 与 Windows 上，deltic 使用**单个递归 `fs.watch` 句柄**监听整个源码
+树 —— macOS 的 kqueue 会为每个被监听目录占用一个 fd，目录一多，再叠加编译
+期临时 fd，就会撞上默认 256 的 fd 软上限并报 `EMFILE`。Linux 保留 chokidar
+（inotify 的 watch descriptor 不是 fd，无此压力）。只要传入任意
+`watch.chokidar` 选项，所有平台都会切换回 chokidar。两种后端下，`ignore`
+都按完整 glob 语义匹配 —— chokidar 4+ 对字符串形式的 `ignored` 只做字面
+比较，因此 ignore 列表会在内部转换为匹配函数。
+
 ### 别名（alias）语义
 
 别名改写会保留 import 的真实相对深度（`../` 永远不会被剥掉），不匹配任何

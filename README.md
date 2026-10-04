@@ -162,6 +162,17 @@ contents at all).
 | `watch` | `{ debounceMs: 200 }` | plus passthrough chokidar options |
 | `logger` / `timer` | built-ins | injectable for tests |
 
+### Watcher backends
+
+deltic watches the source tree with a **single recursive `fs.watch` handle**
+on macOS and Windows — macOS kqueue burns one fd per watched directory, so a
+few hundred source dirs overflow the default 256-fd soft limit with `EMFILE`
+once compile-time descriptors pile up. Linux keeps chokidar (inotify watch
+descriptors are not fds there). Passing any `watch.chokidar` options switches
+every platform to chokidar. In both backends, `ignore` globs match with full
+glob semantics — chokidar 4+ compares plain-string `ignored` entries
+literally, so the ignore list is translated into a matcher internally.
+
 ### Alias semantics
 
 Alias rewriting keeps an import's true relative depth (`../` is never

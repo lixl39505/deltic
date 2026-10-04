@@ -51,7 +51,7 @@ import type {
   Writable as StreamxWritable,
 } from 'streamx'
 import { Readable, Writable, type Transform } from 'streamx'
-import type { FSWatcher } from 'chokidar'
+import type { SourceWatcher } from './core/watcher.js'
 
 const require = createRequire(import.meta.url)
 const pkgInfo = require('../package.json') as { version: string }
@@ -97,7 +97,7 @@ export class Compiler {
   readonly #pipes: Map<string, PipeDef>
   readonly #profiler: Profiler
   readonly #progress: Progress
-  #watcher: FSWatcher | null = null
+  #watcher: SourceWatcher | null = null
   #running = false
 
   static #globalPipes = new Map<string, PipeFactory>()
