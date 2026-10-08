@@ -4,8 +4,13 @@ import path from 'node:path'
 import { Compiler } from '../../src/compiler.js'
 import { cleanPlugin } from '../../src/plugins/clean.js'
 import { compileCachePlugin } from '../../src/plugins/compile-cache.js'
+import { definePlugin } from '../../src/plugins/define-plugin.js'
 import { ConfigError } from '../../src/errors.js'
 import { createProject } from '../integration/helpers.js'
+
+// The builtin plugins are always installed, so opting out of one means
+// replacing it by name with a no-op plugin.
+const withoutDepGraph = definePlugin('dep-graph', () => {})
 
 describe('Compiler.resolve', () => {
   it('resolves root-absolute requests against the source dir', async () => {
@@ -85,7 +90,7 @@ describe('Compiler.resolve', () => {
     })
 
     const config = project.config({
-      plugins: [compileCachePlugin(), cleanPlugin()],
+      plugins: [compileCachePlugin(), cleanPlugin(), withoutDepGraph],
       tasks: { js: { test: '**/*.js', use: ['pass-through'] } },
     })
 
@@ -142,7 +147,7 @@ describe('Compiler.resolve', () => {
     })
 
     const config = project.config({
-      plugins: [compileCachePlugin(), cleanPlugin()],
+      plugins: [compileCachePlugin(), cleanPlugin(), withoutDepGraph],
       tasks: { js: { test: '**/*.js', use: ['pass-through'] } },
     })
 

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { CapabilityMissingError, ConfigError } from '../../../src/errors.js'
 import { BUILTIN_PIPES } from '../../../src/pipes/index.js'
 import { depGraphPlugin } from '../../../src/plugins/dep-graph.js'
+import { definePlugin } from '../../../src/plugins/define-plugin.js'
 import { normalizeTask, resolveOptions } from '../../../src/config/resolve.js'
 import { preset } from '../../../src/preset/index.js'
 import { escapeGlobLiteral } from '../../../src/utils/paths.js'
@@ -147,7 +148,7 @@ describe('resolveOptions', () => {
     ])
   })
 
-  it('lets user plugins replace the defaults', () => {
+  it('installs the builtin plugins even when the user configures plugins', () => {
     const options = resolveOptions(
       makeConfig({
         plugins: [depGraphPlugin()],
@@ -155,7 +156,47 @@ describe('resolveOptions', () => {
       }),
     )
 
-    expect(options.plugins.map((plugin) => plugin.name)).toEqual(['dep-graph'])
+    expect(options.plugins.map((plugin) => plugin.name)).toEqual([
+      'compile-cache',
+      'clean',
+      'dep-graph',
+    ])
+  })
+
+  it('installs the builtin plugins when plugins is empty', () => {
+    const options = resolveOptions(makeConfig({ plugins: [] }))
+
+    expect(options.plugins.map((plugin) => plugin.name)).toEqual([
+      'compile-cache',
+      'dep-graph',
+      'clean',
+    ])
+  })
+
+  it('lets a same-named plugin replace a builtin', () => {
+    const replacement = definePlugin('compile-cache', () => {})
+    const options = resolveOptions(makeConfig({ plugins: [replacement] }))
+
+    expect(options.plugins.map((plugin) => plugin.name)).toEqual([
+      'dep-graph',
+      'clean',
+      'compile-cache',
+    ])
+    expect(options.plugins.at(-1)).toBe(replacement)
+  })
+
+  it('lets a global plugin replace a builtin as well', () => {
+    const replacement = definePlugin('clean', () => {})
+    const options = resolveOptions(makeConfig(), {
+      globalPlugins: [replacement],
+    })
+
+    expect(options.plugins.map((plugin) => plugin.name)).toEqual([
+      'compile-cache',
+      'dep-graph',
+      'clean',
+    ])
+    expect(options.plugins.at(-1)).toBe(replacement)
   })
 
   it('merges builtin, global and user pipes', () => {
@@ -261,7 +302,11 @@ describe('normalizeTask', () => {
       options,
     )
 
-    expect(task.test.options.ignore).toContain('sub/gen/**')
+    // `toGlobPath` rewrites `\` to `/` only where `path.sep` is `\`; POSIX
+    // keeps the backslash because it is a legal filename character there.
+    expect(task.test.options.ignore).toContain(
+      path.sep === '\\' ? 'sub/gen/**' : 'sub\\gen\\**',
+    )
   })
 
   it('accepts tuple and factory pipe refs with option factories', () => {
@@ -343,17 +388,25 @@ describe('normalizeTask', () => {
   })
 
   it('rejects pipes with missing plugin requirements', () => {
-    const bare = resolveOptions(
-      makeConfig({
-        plugins: [depGraphPlugin()],
-        tasks: { js: { test: '**/*.js', use: ['js'], cache: false } },
-      }),
-    )
+    // builtin pipes can no longer miss their requirements — the builtin
+    // plugins are always installed — so exercise the check with a custom pipe
+    // that requires a plugin nobody registered
+    const pipes = {
+      ...options.pipes,
+      'needs-third-party': {
+        name: 'needs-third-party',
+        factory: BUILTIN_PIPES['pass-through']!.factory,
+        requires: ['third-party'],
+      },
+    }
 
-    // pipe-level requirement: `depend` needs dep-graph (installed here), so
-    // use `once` which needs compile-cache instead
     expect(() =>
-      normalizeTask('a', { test: '**/*', use: ['once'], cache: false }, bare),
+      normalizeTask(
+        'a',
+        { test: '**/*', use: ['needs-third-party'], cache: false },
+        options,
+        pipes,
+      ),
     ).toThrow(CapabilityMissingError)
   })
 })
@@ -372,17 +425,16 @@ describe('preset', () => {
   })
 
   it('rejects a cache-enabled task without the compile-cache plugin', () => {
-    const bare = resolveOptions(
-      makeConfig({
-        plugins: [depGraphPlugin()],
-        tasks: {
-          a: { test: '**/*', use: ['pass-through'], cache: false },
-        },
-      }),
-    )
+    const options = resolveOptions(makeConfig())
 
     expect(() =>
-      normalizeTask('b', { test: '**/*', use: ['pass-through'] }, bare),
+      normalizeTask(
+        'a',
+        { test: '**/*', use: ['pass-through'] },
+        options,
+        options.pipes,
+        new Set(),
+      ),
     ).toThrow(CapabilityMissingError)
   })
 

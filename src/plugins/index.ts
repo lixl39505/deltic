@@ -9,7 +9,13 @@ export { compileCachePlugin, type CompileCachePluginOptions } from './compile-ca
 export { depGraphPlugin } from './dep-graph.js'
 export { definePlugin }
 
-/** Plugins installed by default when the user does not configure any. */
+/**
+ * The builtin plugin trio: compile cache, dependency graph, output cleaning.
+ *
+ * They are mandatory — `resolveOptions` always installs them, even when the
+ * config sets `plugins` — because deltic cannot compile without them.
+ * Providing a plugin under one of these names replaces that builtin.
+ */
 export function defaultPlugins(): Plugin[] {
   return [compileCachePlugin(), depGraphPlugin(), cleanPlugin()]
 }

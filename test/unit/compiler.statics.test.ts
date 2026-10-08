@@ -120,6 +120,28 @@ describe('Compiler static registry', () => {
     await compiler.stop()
   })
 
+  it('runs when a plugin replaces the builtin clean capability', async () => {
+    const project = await createProject({
+      'js/a.js': 'export const a = 1\n',
+    })
+
+    const compiler = new Compiler(
+      project.config({
+        tasks: {
+          js: { test: '**/*.js', use: ['pass-through'], cache: false },
+        },
+        // Replacing a builtin by name is the only way to drop its capability.
+        plugins: [definePlugin('clean', () => {})],
+      }),
+    )
+
+    const session = await compiler.run()
+
+    expect(session.total).toBe(1)
+
+    await compiler.stop()
+  })
+
   it('propagates finish-step failures through the task callback', async () => {
     const project = await createProject({
       'js/a.js': 'export const a = 1\n',

@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { createIgnoreMatcher } from '../../../src/utils/ignore.js'
@@ -13,7 +14,14 @@ describe('createIgnoreMatcher', () => {
   it('matches windows backslash paths', () => {
     const matcher = createIgnoreMatcher(['**/tmp/**'])
 
-    expect(matcher('C:\\proj\\src\\tmp\\a.js')).toBe(true)
+    // `toGlobPath` rewrites `\` to `/` only where `path.sep` is `\`. On POSIX
+    // a backslash is a legal filename character, so the path stays literal.
+    if (path.sep === '\\') {
+      expect(matcher('C:\\proj\\src\\tmp\\a.js')).toBe(true)
+    } else {
+      expect(matcher('C:\\proj\\src\\tmp\\a.js')).toBe(false)
+      expect(matcher('proj/src/tmp/a.js')).toBe(true)
+    }
   })
 
   it('prunes a directory whose children would match', () => {

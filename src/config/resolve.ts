@@ -118,12 +118,20 @@ export function resolveOptions(
     pipes[name] = { name, factory }
   }
 
-  // plugins: user set (or defaults) ⊕ global
-  const plugins: Plugin[] = (
-    user.plugins ? [...user.plugins] : defaultPlugins()
-  ).map((plugin) => instantiate(plugin))
-
-  plugins.push(...(context.globalPlugins ?? []))
+  // plugins: builtins ⊕ user ⊕ global. The builtin trio (compile cache,
+  // dependency graph, output cleaning) is what makes deltic compile at all,
+  // so it is always installed — configuring `plugins` extends the builtins
+  // instead of replacing them. Registering a plugin under a builtin's name
+  // replaces that builtin.
+  const configuredPlugins: Plugin[] = [
+    ...(user.plugins ?? []).map((plugin) => instantiate(plugin)),
+    ...(context.globalPlugins ?? []),
+  ]
+  const replaced = new Set(configuredPlugins.map((plugin) => plugin.name))
+  const plugins: Plugin[] = [
+    ...defaultPlugins().filter((plugin) => !replaced.has(plugin.name)),
+    ...configuredPlugins,
+  ]
 
   const installed = new Set(plugins.map((plugin) => plugin.name))
 

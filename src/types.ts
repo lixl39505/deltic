@@ -185,7 +185,11 @@ export interface UserConfig {
   tasks: Record<string, TaskConfig>
   /** Instance-level named pipes, merged over the builtin registry. */
   pipes?: Record<string, PipeFactory>
-  /** Plugins for this instance (default: clean + dep-graph + compile-cache). */
+  /**
+   * Instance-level plugins, appended to the builtin set
+   * (`compile-cache` + `dep-graph` + `clean`), which is always installed.
+   * A plugin reusing a builtin's name replaces that builtin.
+   */
   plugins?: readonly (Plugin | PluginFactory)[]
   /** Performance profiling of pipes and files. */
   profile?: boolean | Partial<ProfileOptions>
