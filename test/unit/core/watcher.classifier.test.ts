@@ -157,6 +157,21 @@ describe('RecursiveWatcher event classification', () => {
     expect(typesOf(harness)).toEqual(['change'])
   })
 
+  it('seeds the initial tree silently, tracking files and directories', async () => {
+    const harness = await createWatcher([], {
+      initialEntries: ['js', 'js/a.js'],
+      statFor: (filePath) =>
+        /[\\/]js$/.test(filePath)
+          ? Promise.resolve(dirStat())
+          : Promise.resolve(fileStat()),
+    })
+
+    // the scan only fills the tracking sets — the tree as found at startup
+    // must not surface as add events
+    expect(harness.events).toEqual([])
+    expect(harness.errors).toEqual([])
+  })
+
   it('emits change for tracked files on raw change events', async () => {
     const harness = await createWatcher()
 
