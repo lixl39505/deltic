@@ -5,3 +5,6 @@ coverage/
 *.log
 .DS_Store
 /.e2e-dbg/
+
+# AI
+.claude/skills
