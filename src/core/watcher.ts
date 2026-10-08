@@ -101,6 +101,10 @@ export function createWatchHandlers(compiler: Compiler): WatchHandlers {
 // chokidar options).
 const RECURSIVE_WATCH_PLATFORMS = new Set(['darwin', 'win32'])
 
+/** Whether this platform's fs.watch backs the `recursive` option at all. */
+export const supportsRecursiveWatch = (): boolean =>
+  RECURSIVE_WATCH_PLATFORMS.has(process.platform)
+
 // FSEvents reports one physical write twice for the same path (the entry that
 // is replaced and the one that appears), and libuv maps both to 'rename'.
 // Replays land within the same millisecond, so identical events for one path
@@ -108,7 +112,7 @@ const RECURSIVE_WATCH_PLATFORMS = new Set(['darwin', 'win32'])
 const EVENT_REPLAY_WINDOW_MS = 100
 
 const canWatchRecursively = (compiler: Compiler): boolean =>
-  RECURSIVE_WATCH_PLATFORMS.has(process.platform) &&
+  supportsRecursiveWatch() &&
   Object.keys(compiler.options.watch.chokidar).length === 0
 
 // Injectable fs operations: tests drive event classification deterministically
@@ -387,7 +391,13 @@ export function watchSource(compiler: Compiler): SourceWatcher {
     logger.error(String(error))
   })
 
-  logger.info(`watching ${sourceDir}`)
+  // Announced only once the backend can actually react. Before `ready`,
+  // writes can still fall into the backend's setup window — chokidar is
+  // still attaching its per-directory watches — so consumers that treat
+  // this line as a start signal would write too early.
+  void backend.ready.then(() => {
+    logger.info(`watching ${sourceDir}`)
+  })
 
   return backend
 }

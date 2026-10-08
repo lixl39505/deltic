@@ -235,6 +235,12 @@ describe('e2e · dev', () => {
         30_000,
       )
 
+      // The artifact above is written by the initial compile BEFORE the dev
+      // process's watcher exists, so it is no readiness signal. The CLI logs
+      // "watching" only once its backend attached its watches (post-ready) —
+      // writes before that land in the backend's setup window and are dropped.
+      await waitFor(() => out.includes('watching'), 10_000)
+
       // incremental recompile on change
       await writeFile(path.join(root, 'src', 'js', 'lib.js'), "export const lib = 'v2'\n")
       await waitFor(
