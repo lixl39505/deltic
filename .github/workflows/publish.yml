@@ -50,4 +50,4 @@ jobs:
 
       - name: Publish to npm
         if: ${{ !inputs.dry-run }}
-        run: npm publish --provenance
+        run: npm publish

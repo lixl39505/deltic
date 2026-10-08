@@ -1,6 +1,10 @@
 {
   "name": "deltic",
   "version": "0.2.1",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lixl39505/deltic.git"
+  },
   "description": "Gulp-based incremental compile toolkit: compiler, plugins, compile cache, dependency graph.",
   "type": "module",
   "license": "MIT",
