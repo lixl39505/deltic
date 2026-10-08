@@ -121,6 +121,52 @@ describe('runCli dev mode', () => {
     expect(running).toBeDefined()
   }, 30000)
 
+  it('refuses a second dev instance for the same project', async () => {
+    await scaffold()
+
+    const listeners: Array<[string, () => void]> = []
+    let running: Compiler | undefined
+
+    const first = runCli(['dev'], {
+      cwd: () => dir!,
+      write: () => {},
+      error: () => {},
+      signals: {
+        once: (name: string, fn: () => void) => {
+          listeners.push([name, fn])
+        },
+      },
+      onStart: (compiler) => {
+        running = compiler
+      },
+    })
+
+    const lockPath = path.join(dir!, '.deltic', 'dev.lock')
+
+    await vi.waitFor(() => {
+      expect(running).toBeDefined()
+      expect(existsSync(lockPath)).toBe(true)
+    })
+
+    const errors: string[] = []
+    const code = await runCli(['dev'], {
+      cwd: () => dir!,
+      write: () => {},
+      error: (message) => errors.push(message),
+      attachSignals: false,
+    })
+
+    expect(code).toBe(1)
+    expect(errors.some((line) => line.includes('already running'))).toBe(true)
+
+    // shutting the first instance down frees the slot again
+    listeners[0]![1]()
+    await expect(first).resolves.toBe(0)
+    expect(existsSync(lockPath)).toBe(false)
+
+    await running!.stop()
+  }, 30000)
+
   it('falls back to process.cwd when deps.cwd is omitted', async () => {
     await scaffold()
     const previous = process.cwd()

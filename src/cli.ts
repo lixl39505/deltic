@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 import { Command, CommanderError } from 'commander'
 
 import { Compiler } from './compiler.js'
+import { acquireInstanceLock } from './core/instance-lock.js'
 import { loadConfig } from './config/load-config.js'
 import type { UserConfig } from './types.js'
 
@@ -85,41 +86,59 @@ async function start(
     )
   }
 
-  const compiler = new Compiler(userConfig)
+  // Same default resolveOptions applies — the lock has to be claimed before
+  // the compiler opens the SQLite store, so it cannot read it from there.
+  const cacheDir = path.resolve(baseDir, userConfig.cacheDir ?? '.deltic')
 
-  if (command === 'dev') {
-    await compiler.watch()
-
-    deps.onStart?.(compiler)
-
-    if (deps.attachSignals !== false) {
-      // main() always provides process; tests inject fakes
-      const signals = deps.signals!
-      let stopping = false
-
-      await new Promise<void>((resolve) => {
-        const shutdown = (): void => {
-          if (stopping) {
-            return
-          }
-
-          stopping = true
-          void compiler.stop().then(resolve)
-        }
-
-        signals.once('SIGINT', shutdown)
-        signals.once('SIGTERM', shutdown)
-      })
-    }
-
-    return 0
-  }
+  // One dev instance per project: a second watcher would double every event
+  // and share the same state database.
+  const lock =
+    command === 'dev'
+      ? await acquireInstanceLock(cacheDir, {
+          cwd: baseDir,
+          version: deps.version ?? pkgInfo.version,
+        })
+      : undefined
 
   try {
-    await compiler.run()
-    return 0
+    const compiler = new Compiler(userConfig)
+
+    if (command === 'dev') {
+      await compiler.watch()
+
+      deps.onStart?.(compiler)
+
+      if (deps.attachSignals !== false) {
+        // main() always provides process; tests inject fakes
+        const signals = deps.signals!
+        let stopping = false
+
+        await new Promise<void>((resolve) => {
+          const shutdown = (): void => {
+            if (stopping) {
+              return
+            }
+
+            stopping = true
+            void compiler.stop().then(resolve)
+          }
+
+          signals.once('SIGINT', shutdown)
+          signals.once('SIGTERM', shutdown)
+        })
+      }
+
+      return 0
+    }
+
+    try {
+      await compiler.run()
+      return 0
+    } finally {
+      await compiler.stop()
+    }
   } finally {
-    await compiler.stop()
+    await lock?.release()
   }
 }
 
