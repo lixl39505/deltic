@@ -33,6 +33,11 @@ deltic dev           # compile, then watch (default command)
 deltic build --profile
 ```
 
+`deltic dev` claims a lock at `<cacheDir>/dev.lock`, so a second dev instance
+for the same project fails fast instead of doubling every watcher event and
+fighting over the same state database. A lock whose owner is gone is taken over
+automatically.
+
 ```ts
 // deltic.config.ts
 import { defineConfig, preset } from 'deltic'
@@ -78,7 +83,8 @@ Pipeline per task (cache misses only — hits are filtered before the pipeline s
 Combo pipes (`js`, `json`) return multiple stages so `--profile` can time each
 stage individually. Pipes declare capability requirements (`depend` needs the
 `dep-graph` plugin); missing wiring fails at startup with a readable
-`ConfigError`, not at runtime.
+`ConfigError`, not at runtime. The builtin plugins are always installed, so
+this mostly guards custom pipe definitions.
 
 ### Plugins
 
@@ -99,8 +105,10 @@ definePlugin('my-plugin', (api) => {
 Hooks: `init` · `clean` · `beforeCompile` · `afterCompile` · `taskError` —
 async handlers run serially in registration order. `Compiler.use(plugin)`
 registers a plugin globally (for instances created afterwards); passing
-`plugins` in the config is instance-scoped. Default plugins:
-`compile-cache`, `dep-graph`, `clean` — replace them by setting `plugins`.
+`plugins` in the config is instance-scoped. The builtin plugins —
+`compile-cache`, `dep-graph`, `clean` — are always installed, because deltic
+cannot compile without them. Configuring `plugins` appends to that set;
+registering a plugin under a builtin's name replaces that builtin.
 
 ### Compile cache
 
@@ -156,7 +164,7 @@ contents at all).
 | `mode` | `development` / `production` per command | injected as `env.mode` |
 | `ignore` | `[]` | extra globs; output/cache/node_modules always ignored |
 | `pipes` | — | instance pipe registry additions |
-| `plugins` | defaults | replaces the default plugin set |
+| `plugins` | `[]` | appended to the builtin plugins; a same-named plugin replaces that builtin |
 | `profile` | `false` | `boolean` or `{ enabled, topPipes, topFiles }` |
 | `progress` | `true` | `[done/total] %` line renderer |
 | `watch` | `{ debounceMs: 200 }` | plus passthrough chokidar options |

@@ -27,6 +27,10 @@ deltic dev           # 编译后进入监听（默认命令）
 deltic build --profile
 ```
 
+`deltic dev` 会在 `<cacheDir>/dev.lock` 上占一个实例锁：同一个项目再启动第二个
+dev 会直接报错退出，而不是把 watcher 事件翻倍、再共用一个状态库。锁的属主进程
+已经退出时会自动接管。
+
 ```ts
 // deltic.config.ts
 import { defineConfig, preset } from 'deltic'
@@ -72,7 +76,8 @@ tasks: {
 
 组合管道（`js`、`json`）会返回多个阶段，`--profile` 可以分别计时每个阶段。
 管道可以声明能力依赖（`depend` 需要 `dep-graph` 插件）；缺失的装配会在启动时
-以可读的 `ConfigError` 失败，而不是在运行中途。
+以可读的 `ConfigError` 失败，而不是在运行中途。内置插件始终会被装上，所以这
+基本只在自定义管道定义时才会触发。
 
 ### 插件
 
@@ -92,8 +97,9 @@ definePlugin('my-plugin', (api) => {
 
 Hooks：`init` · `clean` · `beforeCompile` · `afterCompile` · `taskError` ——
 异步处理器按注册顺序串行执行。`Compiler.use(plugin)` 全局注册插件（对之后
-创建的实例生效）；在配置中传入 `plugins` 则只作用于当前实例。默认插件：
-`compile-cache`、`dep-graph`、`clean` —— 通过设置 `plugins` 可以替换它们。
+创建的实例生效）；在配置中传入 `plugins` 则只作用于当前实例。内置插件：
+`compile-cache`、`dep-graph`、`clean` 三者始终会被装上（deltic 离开它们无法
+编译），配置 `plugins` 是在它们之上追加；用同名的插件即可替换对应的内置插件。
 
 ### 编译缓存
 
@@ -146,7 +152,7 @@ Top-N 表格，并以 `session.profile` 暴露给程序化使用。
 | `mode` | 按命令为 `development` / `production` | 以 `env.mode` 注入 |
 | `ignore` | `[]` | 额外 glob；输出/缓存/node_modules 始终被忽略 |
 | `pipes` | — | 实例管道注册表的补充 |
-| `plugins` | 默认集合 | 替换默认插件集 |
+| `plugins` | `[]` | 在内置插件之上追加；同名插件会替换对应的内置插件 |
 | `profile` | `false` | `boolean` 或 `{ enabled, topPipes, topFiles }` |
 | `progress` | `true` | `[done/total] %` 行式渲染器 |
 | `watch` | `{ debounceMs: 200 }` | 另支持透传 chokidar 选项 |
