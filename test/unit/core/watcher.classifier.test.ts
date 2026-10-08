@@ -33,6 +33,8 @@ function makeCompiler(ignore: string[] = []): Compiler {
 interface DepsHarness {
   /** Feeds a raw fs event and waits for its classification to settle. */
   listener(event: string, fileName: string | Buffer | null): Promise<void>
+  /** Moves the injected clock used by the watcher's replay guard. */
+  advance(ms: number): void
   watcher: RecursiveWatcher
   events: Array<{ type: string; filePath: string }>
   errors: Error[]
@@ -54,6 +56,7 @@ async function createWatcher(
   const events: Array<{ type: string; filePath: string }> = []
   const errors: Error[] = []
   const close = vi.fn()
+  let clock = 0
 
   let rawListener!: (event: string, fileName: string | Buffer | null) => void
 
@@ -85,7 +88,12 @@ async function createWatcher(
   })
 
   const compiler = makeCompiler(ignore)
-  const deps: Partial<WatcherDeps> = { watchFn, statFn, readdirFn }
+  const deps: Partial<WatcherDeps> = {
+    watchFn,
+    statFn,
+    readdirFn,
+    nowFn: () => clock,
+  }
   const watcher = new RecursiveWatcher(compiler, deps)
 
   watcher.on('add', (filePath) => events.push({ type: 'add', filePath }))
@@ -104,6 +112,9 @@ async function createWatcher(
     listener: async (event, fileName) => {
       rawListener(event, fileName)
       await flush()
+    },
+    advance: (ms) => {
+      clock += ms
     },
     watcher,
     events,
@@ -169,6 +180,71 @@ describe('RecursiveWatcher event classification', () => {
     await harness.listener('rename', 'b.js')
 
     expect(typesOf(harness)).toEqual(['add', 'change'])
+  })
+
+  it('collapses the rename pair macOS emits for one save', async () => {
+    const harness = await createWatcher()
+
+    await harness.listener('rename', 'a.js')
+    await harness.listener('rename', 'a.js')
+
+    expect(typesOf(harness)).toEqual(['change'])
+    expect(basenames(harness)).toEqual(['a.js'])
+  })
+
+  it('collapses a raw change followed by the same raw change', async () => {
+    const harness = await createWatcher()
+
+    await harness.listener('change', 'a.js')
+    await harness.listener('change', 'a.js')
+
+    expect(typesOf(harness)).toEqual(['change'])
+  })
+
+  it('reports the same path again once the replay window passed', async () => {
+    const harness = await createWatcher()
+
+    await harness.listener('change', 'a.js')
+    harness.advance(150)
+    await harness.listener('change', 'a.js')
+
+    expect(typesOf(harness)).toEqual(['change', 'change'])
+  })
+
+  it('does not fold a change into a later unlink', async () => {
+    let vanished = false
+    const harness = await createWatcher([], {
+      initialEntries: ['a.js'],
+      statFor: () =>
+        vanished
+          ? Promise.reject(new Error('gone'))
+          : Promise.resolve(fileStat()),
+    })
+
+    await harness.listener('change', 'a.js')
+
+    vanished = true
+    await harness.listener('rename', 'a.js')
+
+    expect(typesOf(harness)).toEqual(['change', 'unlink'])
+  })
+
+  it('forgets the oldest replay entries once the map is full', async () => {
+    const initialEntries = Array.from({ length: 600 }, (_, index) => `p${index}.js`)
+    const harness = await createWatcher([], { initialEntries })
+
+    await Promise.all(
+      initialEntries.map((entry) => harness.listener('change', entry)),
+    )
+
+    expect(harness.events).toHaveLength(600)
+
+    // p0 was evicted by the cap, p599 is still inside the replay window
+    await harness.listener('change', 'p0.js')
+    await harness.listener('change', 'p599.js')
+
+    expect(harness.events).toHaveLength(601)
+    expect(basenames(harness).at(-1)).toBe('p0.js')
   })
 
   it('classifies a vanished file as unlink', async () => {

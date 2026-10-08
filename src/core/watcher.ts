@@ -32,9 +32,15 @@ export interface WatchHandlers {
   flush(): void
 }
 
+// A dev session can touch thousands of paths, so the replay bookkeeping is
+// capped: the oldest entry is dropped once the map grows past this size.
+const MAX_RECENT_EVENTS = 512
+
 // Buffers events and, after `watch.debounceMs` of silence, dispatches one
 // incremental compile plus one cleanup. Per path the LAST event in a burst
-// wins; `unlink` routes to the clean path instead.
+// wins; `unlink` routes to the clean path instead. Logging happens here, once
+// per path, so the output matches the compile batch instead of the raw fs
+// event stream.
 export function createWatchHandlers(compiler: Compiler): WatchHandlers {
   const { options, logger } = compiler
   const buffer: Array<{ path: string; type: WatchEventType }> = []
@@ -50,11 +56,12 @@ export function createWatchHandlers(compiler: Compiler): WatchHandlers {
     const compilePaths: string[] = []
     const unlinkPaths: string[] = []
 
-    for (const [path, type] of latest) {
+    for (const [filePath, type] of latest) {
       if (type === 'unlink') {
-        unlinkPaths.push(path)
+        unlinkPaths.push(filePath)
       } else {
-        compilePaths.push(path)
+        logger.info(`${filePath} was ${type === 'add' ? 'added' : 'changed'}`)
+        compilePaths.push(filePath)
       }
     }
 
@@ -94,6 +101,12 @@ export function createWatchHandlers(compiler: Compiler): WatchHandlers {
 // chokidar options).
 const RECURSIVE_WATCH_PLATFORMS = new Set(['darwin', 'win32'])
 
+// FSEvents reports one physical write twice for the same path (the entry that
+// is replaced and the one that appears), and libuv maps both to 'rename'.
+// Replays land within the same millisecond, so identical events for one path
+// inside this window are collapsed; anything slower is a real edit.
+const EVENT_REPLAY_WINDOW_MS = 100
+
 const canWatchRecursively = (compiler: Compiler): boolean =>
   RECURSIVE_WATCH_PLATFORMS.has(process.platform) &&
   Object.keys(compiler.options.watch.chokidar).length === 0
@@ -108,6 +121,7 @@ export interface WatcherDeps {
   ): NodeFsWatcher
   statFn(path: string): Promise<Stats>
   readdirFn(path: string, options: { recursive: boolean }): Promise<string[]>
+  nowFn(): number
 }
 
 export class RecursiveWatcher extends EventEmitter implements SourceWatcher {
@@ -119,6 +133,7 @@ export class RecursiveWatcher extends EventEmitter implements SourceWatcher {
   readonly #handle: NodeFsWatcher
   readonly #liveFiles = new Set<string>()
   readonly #liveDirs = new Set<string>()
+  readonly #recentEvents = new Map<string, number>()
   #scanChain: Promise<void> = Promise.resolve()
 
   constructor(compiler: Compiler, deps: Partial<WatcherDeps> = {}) {
@@ -128,6 +143,7 @@ export class RecursiveWatcher extends EventEmitter implements SourceWatcher {
       watchFn: fsWatch,
       statFn: stat,
       readdirFn: readdir,
+      nowFn: Date.now,
       ...deps,
     }
     this.#isIgnored = createIgnoreMatcher([
@@ -167,6 +183,29 @@ export class RecursiveWatcher extends EventEmitter implements SourceWatcher {
     this.emit('error', error instanceof Error ? error : new Error(String(error)))
   }
 
+  // Replay guard: drop an event identical to the one just emitted for the same
+  // path. A change followed by an unlink (or an add followed by a change) is a
+  // different type and always goes through.
+  #emit(type: WatchEventType, filePath: string): void {
+    const now = this.#deps.nowFn()
+    const key = `${type}\u0000${filePath}`
+    const last = this.#recentEvents.get(key)
+
+    if (last !== undefined && now - last < EVENT_REPLAY_WINDOW_MS) {
+      return
+    }
+
+    // re-insert so iteration order tracks the most recent emission
+    this.#recentEvents.delete(key)
+    this.#recentEvents.set(key, now)
+
+    if (this.#recentEvents.size > MAX_RECENT_EVENTS) {
+      this.#recentEvents.delete(this.#recentEvents.keys().next().value as string)
+    }
+
+    this.emit(type, filePath)
+  }
+
   #onFsEvent = (event: string, fileName: string | Buffer | null): void => {
     // FSEvents can coalesce bursts into directory-level events without a
     // name; the affected files re-report on their next mutation.
@@ -187,7 +226,7 @@ export class RecursiveWatcher extends EventEmitter implements SourceWatcher {
       // A change for an untracked path arrives as a rename as well; let the
       // rename branch classify it so it is never compiled twice.
       if (this.#liveFiles.has(filePath)) {
-        this.emit('change', filePath)
+        this.#emit('change', filePath)
       }
 
       return
@@ -202,12 +241,12 @@ export class RecursiveWatcher extends EventEmitter implements SourceWatcher {
         }
 
         if (this.#liveFiles.has(filePath)) {
-          this.emit('change', filePath)
+          this.#emit('change', filePath)
           return
         }
 
         this.#liveFiles.add(filePath)
-        this.emit('add', filePath)
+        this.#emit('add', filePath)
       },
       () => {
         this.#forgetPath(filePath)
@@ -223,7 +262,7 @@ export class RecursiveWatcher extends EventEmitter implements SourceWatcher {
     for (const tracked of [...this.#liveFiles]) {
       if (tracked === filePath || tracked.startsWith(prefix)) {
         this.#liveFiles.delete(tracked)
-        this.emit('unlink', tracked)
+        this.#emit('unlink', tracked)
       }
     }
 
@@ -268,7 +307,7 @@ export class RecursiveWatcher extends EventEmitter implements SourceWatcher {
           }
 
           this.#liveFiles.add(entryPath)
-          this.emit('add', entryPath)
+          this.#emit('add', entryPath)
         } catch {
           this.#forgetPath(entryPath)
         }
@@ -336,11 +375,9 @@ export function watchSource(compiler: Compiler): SourceWatcher {
     : createChokidarWatcher(compiler)
 
   backend.on('add', (filePath) => {
-    logger.info(`${filePath} was added`)
     handlers.record(filePath, 'add')
   })
   backend.on('change', (filePath) => {
-    logger.info(`${filePath} was changed`)
     handlers.record(filePath, 'change')
   })
   backend.on('unlink', (filePath) => {

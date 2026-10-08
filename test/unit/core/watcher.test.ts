@@ -55,6 +55,25 @@ describe('createWatchHandlers', () => {
     expect(raw.incrementCompile).toHaveBeenCalledWith(['/src/a.js', '/src/b.js'])
   })
 
+  it('logs one line per path with the event that wins the burst', async () => {
+    const { compiler, logger } = fakeCompiler()
+    const handlers = createWatchHandlers(compiler)
+
+    handlers.record('/src/a.js', 'add')
+    handlers.record('/src/a.js', 'change')
+    handlers.record('/src/b.js', 'change')
+    handlers.record('/src/c.js', 'add')
+    handlers.record('/src/d.js', 'unlink')
+    handlers.flush()
+    await settled()
+
+    expect(logger.info).toHaveBeenCalledWith('/src/a.js was changed')
+    expect(logger.info).toHaveBeenCalledWith('/src/b.js was changed')
+    expect(logger.info).toHaveBeenCalledWith('/src/c.js was added')
+    expect(logger.info).not.toHaveBeenCalledWith('/src/a.js was added')
+    expect(logger.info).not.toHaveBeenCalledWith('/src/d.js was changed')
+  })
+
   it('routes the last unlink of a burst to the clean path', async () => {
     const { compiler, raw } = fakeCompiler()
     const handlers = createWatchHandlers(compiler)
