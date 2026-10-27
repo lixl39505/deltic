@@ -87,8 +87,8 @@ async function makeEnv(
 
   // Warm-up passes so the config checksum snapshot stabilizes before assertions.
   if (options.warmup !== false) {
-    await env.hooks.fire('beforeCompile', { session: {} as never })
-    await env.hooks.fire('beforeCompile', { session: {} as never })
+    await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
+    await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
   }
 
   return {
@@ -126,8 +126,10 @@ async function touch(file: string): Promise<void> {
 
 // A fresh cache store has no task checksums yet, so the first verdict on any
 // file records them and misses. Prime with a throwaway probe file so the
-// target file's record stays untouched for single-call assertions.
-function primeTaskSum(env: Env, taskName = 'js'): void {
+// target file's record stays untouched for single-call assertions. Flushing
+// and re-firing beforeCompile mirrors a real run boundary: the recorded sum
+// only becomes visible to later verdicts through the store snapshot.
+async function primeTaskSum(env: Env, taskName = 'js'): Promise<void> {
   const probe = makeFile(path.join(root!, 'probe.js'), 'content', root!)
   ;(probe as { stat: unknown }).stat = { mtimeMs: 1 }
   probe.context = {
@@ -135,6 +137,8 @@ function primeTaskSum(env: Env, taskName = 'js'): void {
   } as never
 
   callCheck(env, probe, taskName)
+  env.store.flush()
+  await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
 }
 
 describe('compile-cache plugin', () => {
@@ -144,7 +148,7 @@ describe('compile-cache plugin', () => {
       version: '0.1.0',
     })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(true)
   })
@@ -154,7 +158,7 @@ describe('compile-cache plugin', () => {
       compiled: { [path.sep + 'a.js']: 111 },
     })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(false)
   })
@@ -166,7 +170,11 @@ describe('compile-cache plugin', () => {
       withOutput: false,
     })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
+
+    // The gate reads the session-start sample: a deleted output directory is
+    // reported as missing even though later hooks may have re-created it.
+    await env.hooks.fire('beforeCompile', { session: { outputDirExists: false } as never })
 
     expect(callCheck(env, cacheFile())).toBe(false)
   })
@@ -177,7 +185,7 @@ describe('compile-cache plugin', () => {
       version: '0.1.0',
     })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(true)
   })
@@ -188,7 +196,7 @@ describe('compile-cache plugin', () => {
       version: '0.1.0',
     })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(false)
 
@@ -201,12 +209,12 @@ describe('compile-cache plugin', () => {
       version: '0.1.0',
     })
 
+    await primeTaskSum(env)
+
     // Change a checksummed option and re-evaluate.
     ;(env.compiler as unknown as { options: { alias: Record<string, string> } })
       .options.alias = { changed: 'yes' }
-    await env.hooks.fire('beforeCompile', { session: {} as never })
-
-    primeTaskSum(env)
+    await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
 
     expect(callCheck(env, cacheFile())).toBe(false)
   })
@@ -214,7 +222,7 @@ describe('compile-cache plugin', () => {
   it('invalidates when there is no record for the file', async () => {
     const env = await makeEnv({ version: '0.1.0' })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(false)
   })
@@ -225,7 +233,7 @@ describe('compile-cache plugin', () => {
       version: '0.1.0',
     })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
     expect(callCheck(env, cacheFile())).toBe(true)
 
     // Same task name, changed config → verdict flips to a miss.
@@ -234,7 +242,7 @@ describe('compile-cache plugin', () => {
         options: { tasks: Record<string, unknown> }
       }
     ).options.tasks.js = makeTask('v2')
-    await env.hooks.fire('beforeCompile', { session: {} as never })
+    await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
 
     expect(callCheck(env, cacheFile())).toBe(false)
   })
@@ -245,7 +253,7 @@ describe('compile-cache plugin', () => {
       version: '0.1.0',
     })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
 
     expect(callCheck(env, cacheFile(), 'nope')).toBe(false)
   })
@@ -256,7 +264,7 @@ describe('compile-cache plugin', () => {
       version: '0.1.0',
     })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
     env.store.flush()
 
     const stored = env.store.checksums.all()
@@ -279,14 +287,14 @@ describe('compile-cache plugin', () => {
     })
     env.state.set('env', { NAME: 'one' })
 
-    primeTaskSum(env)
+    await primeTaskSum(env)
 
     expect(callCheck(env, cacheFile())).toBe(true)
 
     // env value changed in the resolved options
     ;(env.compiler as unknown as { options: { env: Record<string, string> } })
       .options.env = { NAME: 'two' }
-    await env.hooks.fire('beforeCompile', { session: {} as never })
+    await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
 
     expect(callCheck(env, cacheFile())).toBe(false)
   })
@@ -301,14 +309,14 @@ describe('compile-cache plugin', () => {
 
     // First pass records the snapshot (miss), then a shallow-equal snapshot
     // (fresh object, same shape) keeps the cache warm.
-    primeTaskSum(env)
-    await env.hooks.fire('afterCompile', { session: {} as never })
+    await primeTaskSum(env)
+    await env.hooks.fire('afterCompile', { session: { outputDirExists: true } as never })
     env.store.flush()
-    await env.hooks.fire('beforeCompile', { session: {} as never })
+    await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
     expect(callCheck(env, cacheFile())).toBe(true)
 
     deps = [{ tag: 'two' }]
-    await env.hooks.fire('beforeCompile', { session: {} as never })
+    await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
     expect(callCheck(env, cacheFile())).toBe(false)
   })
 
@@ -320,12 +328,12 @@ describe('compile-cache plugin', () => {
     })
 
     // Snapshot not yet saved → every verdict is a miss.
-    primeTaskSum(env)
+    await primeTaskSum(env)
     expect(callCheck(env, cacheFile())).toBe(false)
 
-    await env.hooks.fire('afterCompile', { session: {} as never })
+    await env.hooks.fire('afterCompile', { session: { outputDirExists: true } as never })
     env.store.flush()
-    await env.hooks.fire('beforeCompile', { session: {} as never })
+    await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
     expect(callCheck(env, cacheFile())).toBe(true)
   })
 
@@ -338,8 +346,8 @@ describe('compile-cache plugin', () => {
     })
 
     // Establish the persisted snapshot so each round below compares values.
-    primeTaskSum(env)
-    await env.hooks.fire('afterCompile', { session: {} as never })
+    await primeTaskSum(env)
+    await env.hooks.fire('afterCompile', { session: { outputDirExists: true } as never })
     env.store.flush()
 
     for (const next of [
@@ -350,12 +358,12 @@ describe('compile-cache plugin', () => {
       ['primitive'],
     ] as Array<readonly unknown[]>) {
       deps = next
-      await env.hooks.fire('beforeCompile', { session: {} as never })
+      await env.hooks.fire('beforeCompile', { session: { outputDirExists: true } as never })
 
       expect(callCheck(env, cacheFile())).toBe(false)
 
       // persist the snapshot like a real run's finish task would
-      await env.hooks.fire('afterCompile', { session: {} as never })
+      await env.hooks.fire('afterCompile', { session: { outputDirExists: true } as never })
       env.store.flush()
     }
   })

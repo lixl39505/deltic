@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+
 import type { Compiler } from '../compiler.js'
 import type { FileContext, SessionContext, SessionOutput, Vinyl } from '../types.js'
 
@@ -14,6 +16,9 @@ export function createSession(compiler: Compiler): SessionContext {
   session.totalCache = 0
   session.totalHit = 0
   session.profile = null
+  ;(session as { outputDirExists: boolean }).outputDirExists = existsSync(
+    compiler.outputDir,
+  )
 
   return session
 }

@@ -386,4 +386,12 @@ export interface SessionContext extends CompileContext {
   totalHit: number
   /** null when profiling is disabled. */
   profile: ProfileReport | null
+  /**
+   * Whether the output directory existed when the session started. Sampled in
+   * `createSession` — before any hook can run — so the compile-cache gate
+   * observes deletion as it happened: a later hook that re-creates the
+   * directory (e.g. a 'clean' handler rewriting a derived index) must not
+   * mask the deletion.
+   */
+  readonly outputDirExists: boolean
 }

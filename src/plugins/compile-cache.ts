@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import path from 'node:path'
 
 import { checksum } from '../utils/hash.js'
@@ -96,9 +95,10 @@ const serializeTask = (task: NormalizedTaskConfig): string =>
   )
 
 // File-level compile cache. A cache entry is invalidated by: a tool version
-// change, a missing output directory, a config checksum change, an extra-deps
-// change, a changed checksum of the owning task's config, a missing record, a
-// changed mtime, or a changed `.env` pseudo-dependency value.
+// change, a missing output directory (sampled when the session starts, before
+// any hook can touch the output directory), a config checksum change, an
+// extra-deps change, a changed checksum of the owning task's config, a missing
+// record, a changed mtime, or a changed `.env` pseudo-dependency value.
 export function compileCachePlugin(options: CompileCachePluginOptions = {}): Plugin {
   const { versionKey = 'version', extraDeps } = options
 
@@ -208,7 +208,11 @@ export function compileCachePlugin(options: CompileCachePluginOptions = {}): Plu
         return true
       }
 
-      taskSums[taskName] = sum
+      // Persist the new sum so the next run starts clean (no extra
+      // invalidation cycle), but leave the in-memory `taskSums` untouched:
+      // updating it here would let every file after the first one of this
+      // task pass the gate although the task's pipeline changed. The write is
+      // queued, not committed, so repeating it per file is cheap.
       store.checksums.upsert(TASK_SCOPE, [[taskName, sum]])
 
       return false
@@ -286,9 +290,16 @@ export function compileCachePlugin(options: CompileCachePluginOptions = {}): Plu
       removeCache(expired)
     })
 
-    hooks.on('beforeCompile', () => {
+    hooks.on('beforeCompile', ({ session }) => {
       lastVersion = compiler.query<string | undefined>(versionKey, undefined)
-      isOutputDirExist = existsSync(compiler.outputDir)
+      // Sampled at session creation — before the 'clean' hook and every other
+      // observer — so plugin side effects (rewriting a derived index, say)
+      // cannot resurrect the directory and mask a deletion.
+      isOutputDirExist = session.outputDirExists
+      // Pick up task sums the previous run flushed to the store: without this,
+      // a dev session (one process, many runs) would re-invalidate its task
+      // on every run after a change instead of only the first one.
+      taskSums = store.checksums.all()[TASK_SCOPE] ?? {}
       isOptionsChanged = checkOptionsChanged()
       currentTaskSums.clear()
 
